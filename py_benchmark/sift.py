@@ -99,7 +99,7 @@ def benchmark_sift(image_path, n_runs=50):
 if __name__ == "__main__":
     import sys
     
-    image_path = sys.argv[1] if len(sys.argv) > 1 else "examples/Eiffel_Tower_1.jpg"
+    image_path = sys.argv[1] if len(sys.argv) > 1 else "sample/Eiffel_Tower_1.jpg"
     
     # Warm-up run (not measured)
     img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
@@ -107,4 +107,4 @@ if __name__ == "__main__":
         sift = cv2.SIFT_create()
         sift.detectAndCompute(img, None)
     
-    results = benchmark_sift(image_path, n_runs=50)
+    results = benchmark_sift(image_path, n_runs=1)
