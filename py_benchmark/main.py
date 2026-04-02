@@ -4,13 +4,13 @@ import time
 import psutil
 import os
 import glob
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
-def benchmark_sift(image_path, n_runs=50):
-    """Benchmark OpenCV's SIFT descriptor generation on a single image."""
-    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-    if img is None:
-        raise FileNotFoundError(f"Could not load image: {image_path}")
 
+def benchmark_sift_on_array(img, n_runs=50):
+    """Benchmark OpenCV's SIFT descriptor generation on a grayscale ndarray."""
     sift = cv2.SIFT_create()
 
     detect_times = []
@@ -36,16 +36,130 @@ def benchmark_sift(image_path, n_runs=50):
         combined_times.append(end - start)
 
     return {
-        "image_path": image_path,
         "image_shape": img.shape,
         "num_keypoints": len(keypoints),
-        "descriptor_shape": descriptors.shape,
+        "descriptor_shape": descriptors.shape if descriptors is not None else (0, 128),
         "detect_times": np.array(detect_times),
         "compute_times": np.array(compute_times),
         "combined_times": np.array(combined_times),
         "img_nbytes": img.nbytes,
-        "desc_nbytes": descriptors.nbytes,
+        "desc_nbytes": descriptors.nbytes if descriptors is not None else 0,
     }
+
+
+def benchmark_sift(image_path, n_runs=50):
+    """Benchmark OpenCV's SIFT descriptor generation on a single image."""
+    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise FileNotFoundError(f"Could not load image: {image_path}")
+    result = benchmark_sift_on_array(img, n_runs=n_runs)
+    result["image_path"] = image_path
+    return result
+
+
+def benchmark_across_scales(image_path, scales=(0.10, 0.25, 0.50, 0.75, 1.00), n_runs=50):
+    """Run benchmark at multiple resolution scales of a single image."""
+    img_full = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    if img_full is None:
+        raise FileNotFoundError(f"Could not load image: {image_path}")
+
+    h_full, w_full = img_full.shape
+    scale_results = []
+    for scale in scales:
+        new_w = max(1, int(w_full * scale))
+        new_h = max(1, int(h_full * scale))
+        img_scaled = cv2.resize(img_full, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        print(f"  Scale {scale*100:.0f}%: {new_w}x{new_h} ({new_w*new_h} pixels)")
+        r = benchmark_sift_on_array(img_scaled, n_runs=n_runs)
+        r["scale"] = scale
+        r["total_pixels"] = new_w * new_h
+        r["width"] = new_w
+        r["height"] = new_h
+        scale_results.append(r)
+
+    return scale_results
+
+
+def plot_time_vs_size(scale_results, output_path):
+    """Line plot: mean timing for each phase vs. image resolution."""
+    pixels = [r["total_pixels"] for r in scale_results]
+    detect_ms  = [np.mean(r["detect_times"])  * 1000 for r in scale_results]
+    compute_ms = [np.mean(r["compute_times"]) * 1000 for r in scale_results]
+    combined_ms = [np.mean(r["combined_times"]) * 1000 for r in scale_results]
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(pixels, detect_ms,   "o-", label="Detection",   color="#1f77b4")
+    ax.plot(pixels, compute_ms,  "s-", label="Descriptor",  color="#ff7f0e")
+    ax.plot(pixels, combined_ms, "^-", label="Combined",    color="#2ca02c")
+
+    ax.set_xlabel("Image Size (pixels)", fontsize=12)
+    ax.set_ylabel("Mean Time (ms)", fontsize=12)
+    ax.set_title("SIFT Execution Time vs. Image Size", fontsize=13)
+    ax.legend()
+    ax.grid(True, linestyle="--", alpha=0.5)
+
+    # Annotate resolution labels on x-axis
+    labels = [f"{r['width']}×{r['height']}" for r in scale_results]
+    ax.set_xticks(pixels)
+    ax.set_xticklabels(labels, rotation=30, ha="right", fontsize=9)
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+    print(f"Saved: {output_path}")
+
+
+def plot_keypoints_vs_size(scale_results, output_path):
+    """Line plot: number of detected keypoints vs. image resolution."""
+    pixels = [r["total_pixels"] for r in scale_results]
+    keypoints = [r["num_keypoints"] for r in scale_results]
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(pixels, keypoints, "o-", color="#9467bd", linewidth=2)
+
+    ax.set_xlabel("Image Size (pixels)", fontsize=12)
+    ax.set_ylabel("Keypoints Detected", fontsize=12)
+    ax.set_title("SIFT Keypoints Detected vs. Image Size", fontsize=13)
+    ax.grid(True, linestyle="--", alpha=0.5)
+
+    labels = [f"{r['width']}×{r['height']}" for r in scale_results]
+    ax.set_xticks(pixels)
+    ax.set_xticklabels(labels, rotation=30, ha="right", fontsize=9)
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+    print(f"Saved: {output_path}")
+
+
+def plot_timing_distribution(results, output_path):
+    """Box plot: timing distribution (all runs) for detect / compute / combined."""
+    # Collect times in ms across all provided results
+    detect_ms  = np.concatenate([r["detect_times"]  for r in results]) * 1000
+    compute_ms = np.concatenate([r["compute_times"] for r in results]) * 1000
+    combined_ms = np.concatenate([r["combined_times"] for r in results]) * 1000
+
+    data = [detect_ms, compute_ms, combined_ms]
+    labels = ["Detection", "Descriptor\nComputation", "Combined"]
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    bp = ax.boxplot(data, labels=labels, patch_artist=True, notch=False,
+                    medianprops={"color": "black", "linewidth": 2})
+
+    colors = ["#1f77b4", "#ff7f0e", "#2ca02c"]
+    for patch, color in zip(bp["boxes"], colors):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.7)
+
+    ax.set_ylabel("Time (ms)", fontsize=12)
+    ax.set_title("SIFT Timing Distribution (per phase)", fontsize=13)
+    ax.grid(True, axis="y", linestyle="--", alpha=0.5)
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+    print(f"Saved: {output_path}")
+
 
 def print_stats(name, times_ms):
     times_ms = times_ms * 1000
@@ -91,6 +205,7 @@ def print_aggregate(all_results):
     print(f"  Avg keypoints per image:        {total_kp / len(all_results):.0f}")
     print(f"  Avg compute time per image:     {np.mean(all_compute)*1000:.3f} ms")
 
+
 if __name__ == "__main__":
     import sys
 
@@ -120,3 +235,25 @@ if __name__ == "__main__":
 
     if all_results:
         print_aggregate(all_results)
+
+        # --- Plotting ---
+        plots_dir = os.path.join(dataset_dir, "plots")
+        os.makedirs(plots_dir, exist_ok=True)
+
+        # Scale analysis uses the first image in the dataset
+        ref_image = image_paths[0]
+        print(f"\nGenerating scale plots using: {ref_image}")
+        scale_results = benchmark_across_scales(ref_image, n_runs=n_runs)
+
+        plot_time_vs_size(
+            scale_results,
+            os.path.join(plots_dir, "time_vs_size.png"),
+        )
+        plot_keypoints_vs_size(
+            scale_results,
+            os.path.join(plots_dir, "keypoints_vs_size.png"),
+        )
+        plot_timing_distribution(
+            all_results,
+            os.path.join(plots_dir, "timing_distribution.png"),
+        )
