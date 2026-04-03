@@ -211,6 +211,7 @@ if __name__ == "__main__":
 
     dataset_dir = sys.argv[1] if len(sys.argv) > 1 else "dataset"
     n_runs = int(sys.argv[2]) if len(sys.argv) > 2 else 50
+    n_images = int(sys.argv[3]) if len(sys.argv) > 3 else None  # None = all images
 
     image_paths = sorted(
         glob.glob(os.path.join(dataset_dir, "*"))
@@ -221,7 +222,10 @@ if __name__ == "__main__":
         print(f"No images found in {dataset_dir}")
         sys.exit(1)
 
-    print(f"Found {len(image_paths)} images in {dataset_dir}")
+    if n_images is not None:
+        image_paths = image_paths[:n_images]
+
+    print(f"Found {len(image_paths)} images in {dataset_dir} (using first {len(image_paths)})")
     print(f"Runs per image: {n_runs}")
 
     all_results = []
